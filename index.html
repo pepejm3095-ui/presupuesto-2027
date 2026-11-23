@@ -109,6 +109,12 @@ td.nt input:focus{outline:2px solid var(--red);outline-offset:-2px;background:va
 #tAcc td,#tAcc th{text-align:left}#tAcc td.acts{text-align:right}
 .codbox{border:2px solid var(--ink);background:var(--card);padding:16px;margin:12px 0;max-width:640px}
 .codbox .cod{font:700 30px "Inter Tight",sans-serif;letter-spacing:.06em;margin:6px 0}
+.grid.drop{outline:3px dashed var(--red);outline-offset:-6px}
+.err{color:var(--red)}
+.nl-form{grid-template-columns:repeat(3,minmax(0,1fr))}
+.nl-btns{display:flex;gap:8px;align-items:end}
+@media(max-width:800px){.nl-form{grid-template-columns:1fr}}
+button.quitar{display:block;margin-top:6px;min-height:30px;font-size:12.5px}
 .pill{display:inline-block;padding:2px 10px;border:1px solid var(--ink);font-size:13px;margin-left:8px;vertical-align:middle}
 </style>
 </head>
@@ -173,13 +179,33 @@ td.nt input:focus{outline:2px solid var(--red);outline-offset:-2px;background:va
       <button class="btn pri" id="bSave" type="button" disabled>Guardar</button>
       <button class="btn" id="bSend" type="button">Enviar a Finanzas</button>
       <button class="btn warn" id="bReopen" type="button">Reabrir captura</button>
+      <button class="btn" id="bNueva" type="button">Agregar línea</button>
       <button class="btn" id="bOpen" type="button">Abrir todo</button>
-      <button class="btn" id="bXA" type="button">Exportar (.xlsx)</button>
+      <button class="btn" id="bXA" type="button">Descargar plantilla</button>
+      <button class="btn pri" id="bImp" type="button">Cargar Excel</button>
+      <input type="file" id="fImp" accept=".xlsx,.xls,.xlsm" class="hidden">
       <button class="btn" id="bReload" type="button">Recargar</button>
     </div>
     <p class="msg" id="msg">Cargando…</p>
+    <div id="nlBox" class="codbox hidden" style="max-width:none">
+      <form id="fNueva" class="acc-form nl-form">
+        <label id="nlAreaL">Área<select class="field" id="nlArea"></select></label>
+        <label>Rubro<select class="field" id="nlRubro"></select></label>
+        <label>Concepto<input class="field" id="nlConcepto" maxlength="120" required placeholder="Ej. LICENCIAS DE DISEÑO"></label>
+        <label>Cuenta contable (opcional)<input class="field" id="nlCuenta" list="nlCuentas" maxlength="30" placeholder="6000-100-…"></label>
+        <label>Descripción de la cuenta<input class="field" id="nlDesc" maxlength="120"></label>
+        <label>Departamento (CECO)<select class="field" id="nlCeco"></select></label>
+        <div class="nl-btns"><button class="btn pri" type="submit">Agregar</button><button class="btn" id="bNlNo" type="button">Cancelar</button></div>
+      </form>
+      <datalist id="nlCuentas"></datalist>
+      <p class="msg" id="msgNl"></p>
+    </div>
+    <div id="impBox" class="codbox hidden" style="max-width:none">
+      <div id="impRes"></div>
+      <div class="tools" style="margin:12px 0 0"><button class="btn pri" id="bImpOk" type="button">Aplicar y guardar</button><button class="btn" id="bImpNo" type="button">Cancelar</button></div>
+    </div>
     <div class="grid" id="grid"></div>
-    <p class="help">Captura en pesos, sin IVA. Puedes pegar un bloque copiado de Excel en cualquier celda. Escribir en <b>Total anual</b> reparte el importe en 12 meses iguales. Usa <b>Nota</b> para el supuesto de cada partida. Al enviar, la captura queda cerrada hasta que Finanzas la reabra.</p>
+    <p class="help">Captura en pesos, sin IVA. Para trabajar en Excel: <b>Descargar plantilla</b>, llénala y súbela con <b>Cargar Excel</b> (o arrástrala sobre la tabla). También se acepta el formato oficial 2027 lleno. Antes de guardar verás qué cambia. Si falta una partida, usa <b>Agregar línea</b>. También puedes pegar un bloque copiado de Excel en cualquier celda. Escribir en <b>Total anual</b> reparte el importe en 12 meses iguales. Usa <b>Nota</b> para el supuesto de cada partida. Al enviar, la captura queda cerrada hasta que Finanzas la reabra.</p>
   </section>
 
   <section id="vCons" class="hidden">

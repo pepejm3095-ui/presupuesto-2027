@@ -28,5 +28,15 @@ Las reglas se validan en la base de datos (Row Level Security), no solo en la p�
 
 El mismo código sirve para restablecer una contraseña olvidada.
 
+## Captura desde Excel
+- **Descargar plantilla**: Excel con las partidas de la vista (columna ID, 12 meses, total con fórmula y nota).
+- **Cargar Excel**: acepta esa plantilla o el formato oficial 2027 lleno (se usa el número de fila del formato).
+  Muestra una vista previa (cambios, total antes/después, lo que se ignora) antes de guardar.
+
+## Líneas nuevas
+Usuarios con rol captura (en su área/departamento, mientras no esté enviada) y administradores pueden
+**Agregar línea** (rubro, concepto, cuenta opcional, CECO). Reciben ID desde 100000 y se pueden quitar
+mientras la captura siga abierta. Las líneas del formato original no se pueden quitar.
+
 ## Base de datos
 Migraciones en `supabase/migrations/`, función en `supabase/functions/cuentas/`.

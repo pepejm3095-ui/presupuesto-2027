@@ -92,7 +92,7 @@ async function cargar() {
     ]);
     accesos = acc; admin = acc.some(a => a.email === me && a.rol === 'admin');
     DEP = Object.fromEntries(dp.map(d => [d.ceco, d.nombre]));
-    LINEAS = li; byId = Object.fromEntries(li.map(l => [l.id, l]));
+    LINEAS = li; ordenar();
     const visibles = new Set(li.map(l => l.area));
     AREAS = ar.filter(a => visibles.has(a.k));
     montos = {}; for (const r of mo) montos[r.linea_id] = { m: r.m.map(Number), nota: r.nota || '', ts: r.actualizado, por: r.actualizado_por };
@@ -106,6 +106,15 @@ async function cargar() {
   if (!AREAS.some(a => a.k === cur) && !(cur === TODAS && verTodas())) cur = admin ? TODAS : AREAS[0].k;
   route();
 }
+
+function ordenar() {
+  const max = {};
+  for (const l of LINEAS) if (l.origen !== 'usuario') max[l.rubro] = Math.max(max[l.rubro] || 0, l.id);
+  const key = l => l.origen === 'usuario' ? (max[l.rubro] ?? 1e9) + l.id / 1e7 : l.id;
+  LINEAS.sort((a, b) => key(a) - key(b));
+  byId = Object.fromEntries(LINEAS.map(l => [l.id, l]));
+}
+const borrable = l => l.origen === 'usuario' && editable(l);
 
 // ---------- estado y totales ----------
 function lineasArea(k) { return k === TODAS ? LINEAS : LINEAS.filter(l => l.area === k); }
@@ -162,7 +171,7 @@ function row(l, gid) {
   const v = val(l.id), tot = sum(v.m), dep = DEP[l.ceco] || '', ro = editable(l) ? '' : 'disabled';
   const tag = l.llenado_por === 'OPERACIONES/VENTAS' ? ' · Operaciones/Ventas' : '';
   const q = (l.concepto + ' ' + (l.descripcion || '') + ' ' + (l.cuenta || '') + ' ' + l.ceco + ' ' + dep + ' ' + l.rubro).toLowerCase();
-  return `<tr data-id="${l.id}" data-q="${esc(q)}" class="${gid ? 'kid hide' : ''}" ${gid ? `data-p="${gid}"` : ''}><td class="c">${esc(gid ? dep || l.ceco : l.concepto)}<small>${esc(gid ? l.descripcion : [l.cuenta, l.descripcion].filter(Boolean).join(' · ') || 'Sin cuenta asignada')}${tag}${cur === TODAS ? ' · ' + esc(nombreArea(l.area)) : ''}${cerrado(l) ? ' · enviado' : ''}</small></td><td class="ceco">${esc(l.ceco)}</td>` +
+  return `<tr data-id="${l.id}" data-q="${esc(q)}" class="${gid ? 'kid hide' : ''}" ${gid ? `data-p="${gid}"` : ''}><td class="c">${esc(gid ? dep || l.ceco : l.concepto)}<small>${esc(gid ? l.descripcion : [l.cuenta, l.descripcion].filter(Boolean).join(' · ') || 'Sin cuenta asignada')}${tag}${cur === TODAS ? ' · ' + esc(nombreArea(l.area)) : ''}${cerrado(l) ? ' · enviado' : ''}${l.origen === 'usuario' ? ' · línea agregada por ' + esc(l.creada_por || '') : ''}</small>${borrable(l) ? `<button class="btn sm warn quitar" type="button" data-quitar="${l.id}">Quitar línea</button>` : ''}</td><td class="ceco">${esc(l.ceco)}</td>` +
     MES.map((_, i) => `<td class="n"><input inputmode="decimal" data-id="${l.id}" data-m="${i}" value="${v.m[i] ? fmt2.format(v.m[i]) : ''}" class="${v.m[i] ? 'has' : ''}" aria-label="${esc(l.concepto)} ${esc(l.ceco)} ${MES[i]}" ${ro}></td>`).join('') +
     `<td class="n t"><input inputmode="decimal" data-id="${l.id}" data-m="12" value="${tot ? fmt.format(tot) : ''}" aria-label="Total anual ${esc(l.concepto)} ${esc(l.ceco)}" ${ro}></td>` +
     `<td class="nt"><input data-id="${l.id}" data-m="nota" value="${esc(v.nota)}" aria-label="Nota ${esc(l.concepto)} ${esc(l.ceco)}" placeholder="${ro ? '' : 'Supuesto o comentario'}" ${ro}></td></tr>`;
@@ -225,6 +234,7 @@ function statusCap() {
   $('bSend').classList.toggle('hidden', cur === TODAS || !puede || e === 'env');
   $('bReopen').classList.toggle('hidden', cur === TODAS || !admin || (e !== 'env' && e !== 'par'));
   $('bSave').classList.toggle('hidden', !ls.some(editable));
+  $('bNueva').classList.toggle('hidden', !areasAlta().length);
   $('tArea').textContent = nombreArea(cur);
   $('estadoArea').textContent = ESTX[e];
 }
@@ -315,14 +325,24 @@ $('bCopy').onclick = async () => {
 };
 
 // ---------- exportar ----------
+// Columnas de la plantilla: A=ID (fila del formato oficial), B..H descriptivas, I..T meses, U total, V nota
+const COL_MES = 8;
 function exportX(ls, name, conResumen) {
-  const head = ['Rubro', 'Concepto', 'Cuenta', 'Descripción cuenta contable', 'CECO', 'Departamento', 'Llenado por', ...MES.map(m => m + ' ' + EJ), 'Total ' + EJ, 'Nota'];
-  const rows = ls.map(l => { const v = val(l.id); return [l.rubro, l.concepto, l.cuenta || '', l.descripcion || '', l.ceco, DEP[l.ceco] || '', l.llenado_por, ...v.m.map(x => +x || 0), sum(v.m), v.nota]; });
+  const head = ['ID', 'Rubro', 'Concepto', 'Cuenta', 'Descripción cuenta contable', 'CECO', 'Departamento', 'Llenado por', ...MES.map(m => m + ' ' + EJ), 'Total ' + EJ, 'Nota'];
+  const rows = ls.map(l => { const v = val(l.id); return [l.id, l.rubro, l.concepto, l.cuenta || '', l.descripcion || '', l.ceco, DEP[l.ceco] || '', l.llenado_por, ...v.m.map(x => +x || 0), 0, v.nota]; });
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([[window.CONFIG.empresa], ['PRESUPUESTO GASTOS DE OPERACIÓN · EJERCICIO ' + EJ], [], head, ...rows]);
-  ws['!cols'] = [{ wch: 26 }, { wch: 34 }, { wch: 16 }, { wch: 34 }, { wch: 7 }, { wch: 22 }, { wch: 16 }, ...Array(13).fill({ wch: 13 }), { wch: 40 }];
-  for (let R = 4; R < rows.length + 4; R++) for (let C = 7; C <= 19; C++) { const c = ws[XLSX.utils.encode_cell({ r: R, c: C })]; if (c) c.z = '#,##0.00'; }
-  XLSX.utils.book_append_sheet(wb, ws, 'G&A');
+  const ws = XLSX.utils.aoa_to_sheet([[window.CONFIG.empresa], ['PRESUPUESTO GASTOS DE OPERACIÓN · EJERCICIO ' + EJ],
+    ['Captura los importes en pesos sin IVA en las columnas de los meses y vuelve a subir este archivo con "Cargar Excel". No cambies la columna ID.'], head, ...rows]);
+  const H = 4; // filas antes de los datos
+  rows.forEach((_, i) => {
+    const R = H + i, a = XLSX.utils.encode_cell({ r: R, c: COL_MES }), b = XLSX.utils.encode_cell({ r: R, c: COL_MES + 11 });
+    ws[XLSX.utils.encode_cell({ r: R, c: COL_MES + 12 })] = { t: 'n', f: `SUM(${a}:${b})`, v: sum(val(ls[i].id).m) };
+    for (let C = COL_MES; C <= COL_MES + 12; C++) { const c = ws[XLSX.utils.encode_cell({ r: R, c: C })]; if (c) c.z = '#,##0.00'; }
+  });
+  ws['!cols'] = [{ wch: 6, hidden: false }, { wch: 24 }, { wch: 32 }, { wch: 16 }, { wch: 30 }, { wch: 7 }, { wch: 20 }, { wch: 15 }, ...Array(13).fill({ wch: 13 }), { wch: 40 }];
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: 3, c: 0 }, e: { r: H + rows.length - 1, c: COL_MES + 13 } }) };
+  ws['!freeze'] = { xSplit: 3, ySplit: 4 };
+  XLSX.utils.book_append_sheet(wb, ws, 'Captura');
   if (conResumen) {
     const s = [['Área', ...MES, 'Total', 'Estado']]; AREAS.forEach(a => { const m = mesesDe(lineasArea(a.k)); s.push([a.nombre, ...m, sum(m), ESTX[estado(a.k)]]); });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(s), 'Resumen por área');
@@ -331,6 +351,158 @@ function exportX(ls, name, conResumen) {
   }
   XLSX.writeFile(wb, name);
 }
+
+// ---------- cargar desde Excel ----------
+const norm = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toUpperCase();
+function celdaNum(c) {
+  if (c == null || c.v == null || c.v === '') return { n: 0 };
+  if (typeof c.v === 'number') return { n: Math.round(c.v * 100) / 100 };
+  const n = parseNum(c.v); return isNaN(n) ? { err: String(c.v) } : { n: Math.round(n * 100) / 100 };
+}
+// Devuelve [{id, m:[12], nota?, fila}] y errores, a partir de la plantilla o del formato oficial
+function leerLibro(wb) {
+  const errores = [], filas = [];
+  for (const nombre of wb.SheetNames) {
+    const ws = wb.Sheets[nombre]; if (!ws['!ref']) continue;
+    const rg = XLSX.utils.decode_range(ws['!ref']);
+    const cel = (r, c) => ws[XLSX.utils.encode_cell({ r, c })];
+    // 1) Plantilla: encabezado con "ID" en la columna A y meses a partir de la I
+    let hdr = -1;
+    for (let r = 0; r <= Math.min(rg.e.r, 15); r++) if (norm(cel(r, 0)?.v) === 'ID' && norm(cel(r, COL_MES)?.v).startsWith('ENE')) { hdr = r; break; }
+    if (hdr >= 0) {
+      const notaCol = [...Array(rg.e.c + 1).keys()].find(c => norm(cel(hdr, c)?.v) === 'NOTA');
+      for (let r = hdr + 1; r <= rg.e.r; r++) {
+        const id = +cel(r, 0)?.v; if (!id || !byId[id]) continue;
+        const m = []; let ok = true;
+        for (let i = 0; i < 12; i++) { const x = celdaNum(cel(r, COL_MES + i)); if (x.err) { errores.push(`Fila ${r + 1}, ${MES[i]}: "${x.err}" no es número`); ok = false; } m.push(x.n || 0); }
+        if (ok) filas.push({ id, m, nota: notaCol != null ? String(cel(r, notaCol)?.v ?? '').trim() : undefined, fila: r + 1 });
+      }
+      return { formato: 'Plantilla de la página', hoja: nombre, filas, errores };
+    }
+    // 2) Formato oficial: meses ENERO..DICIEMBRE en J..U (fila 6); el número de fila es el ID
+    let fm = -1;
+    for (let r = 0; r <= Math.min(rg.e.r, 15); r++) if (norm(cel(r, 9)?.v) === 'ENERO' && norm(cel(r, 20)?.v) === 'DICIEMBRE') { fm = r; break; }
+    if (fm >= 0) {
+      for (let r = fm + 1; r <= rg.e.r; r++) {
+        const id = r + 1, l = byId[id]; if (!l) continue;
+        const concepto = norm(cel(r, 2)?.v);
+        if (concepto && concepto !== norm(l.concepto)) { errores.push(`Fila ${id}: el concepto "${cel(r, 2).v}" no coincide con "${l.concepto}"; se ignoró (¿se insertaron filas en el formato?)`); continue; }
+        const ceco = norm(cel(r, 5)?.v);
+        if (ceco && ceco !== l.ceco) { errores.push(`Fila ${id}: CECO ${ceco} no coincide con ${l.ceco}; se ignoró`); continue; }
+        const m = []; let ok = true;
+        for (let i = 0; i < 12; i++) { const x = celdaNum(cel(r, 9 + i)); if (x.err) { errores.push(`Fila ${id}, ${MES[i]}: "${x.err}" no es número`); ok = false; } m.push(x.n || 0); }
+        if (ok) filas.push({ id, m, fila: id });
+      }
+      return { formato: 'Formato oficial 2027', hoja: nombre, filas, errores };
+    }
+  }
+  return null;
+}
+let pendiente = null;
+async function cargarArchivo(f) {
+  say('Leyendo ' + f.name + '…');
+  let wb; try { wb = XLSX.read(await f.arrayBuffer(), { cellFormula: false }); } catch { return say('No pude leer el archivo. ¿Es un Excel (.xlsx o .xls)?', true); }
+  const r = leerLibro(wb);
+  if (!r) return say('No reconozco el archivo: usa la plantilla que descargas con "Descargar plantilla" o el formato oficial de presupuesto 2027 sin modificar columnas.', true);
+  const visibles = new Set(lineasVista().map(l => l.id));
+  const cambios = [], sinPermiso = [], fuera = [];
+  for (const x of r.filas) {
+    const l = byId[x.id];
+    if (!visibles.has(x.id)) { if (x.m.some(n => n) || x.nota) fuera.push(x); continue; }
+    const v = val(x.id), cambiaM = x.m.some((n, i) => Math.abs(n - (+v.m[i] || 0)) > 0.004), cambiaN = x.nota !== undefined && x.nota !== v.nota;
+    if (!cambiaM && !cambiaN) continue;
+    if (!editable(l)) { sinPermiso.push(x); continue; }
+    cambios.push({ ...x, antes: sum(v.m), despues: sum(x.m) });
+  }
+  pendiente = cambios;
+  const antes = sum(cambios.map(c => c.antes)), despues = sum(cambios.map(c => c.despues));
+  const lista = cambios.slice(0, 200).map(c => { const l = byId[c.id]; return `<tr><td>${c.fila}</td><td>${esc(l.concepto)}<small> · ${esc(l.ceco)} ${esc(DEP[l.ceco] || '')}</small></td><td>${fmt.format(c.antes)}</td><td><b>${fmt.format(c.despues)}</b></td></tr>`; }).join('');
+  $('impBox').classList.remove('hidden');
+  $('impRes').innerHTML = `<p><b>${esc(f.name)}</b> · ${r.formato} (hoja "${esc(r.hoja)}")</p>
+    <p class="num-big" style="font-size:22px;margin:4px 0">${cambios.length} partida(s) con cambios · ${money(antes)} → ${money(despues)}</p>
+    <ul class="help" style="margin:6px 0 10px">
+      ${fuera.length ? `<li>${fuera.length} partida(s) con datos que no son de esta vista (${esc(nombreArea(cur))}${ceco ? ' · ' + esc(ceco) : ''}); no se tocan.</li>` : ''}
+      ${sinPermiso.length ? `<li>${sinPermiso.length} partida(s) sin permiso o ya enviadas; no se tocan.</li>` : ''}
+      ${r.errores.length ? `<li class="err">${r.errores.length} aviso(s): ${r.errores.slice(0, 5).map(esc).join(' · ')}${r.errores.length > 5 ? ' …' : ''}</li>` : ''}
+    </ul>
+    ${cambios.length ? `<div class="grid" style="max-height:260px"><table class="cons"><thead><tr><th>Fila</th><th>Partida</th><th>Antes</th><th>Después</th></tr></thead><tbody>${lista}</tbody></table></div>` : '<p>No hay nada que cambiar.</p>'}`;
+  $('bImpOk').disabled = !cambios.length;
+  say('Revisa los cambios del archivo antes de aplicarlos.');
+  $('impBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+$('bImp').onclick = () => { $('fImp').value = ''; $('fImp').click(); };
+$('fImp').onchange = () => { const f = $('fImp').files[0]; if (f) cargarArchivo(f); };
+$('grid').addEventListener('dragover', e => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); $('grid').classList.add('drop'); } });
+$('grid').addEventListener('dragleave', () => $('grid').classList.remove('drop'));
+$('grid').addEventListener('drop', e => { const f = e.dataTransfer?.files?.[0]; if (!f) return; e.preventDefault(); $('grid').classList.remove('drop'); cargarArchivo(f); });
+$('bImpNo').onclick = () => { pendiente = null; $('impBox').classList.add('hidden'); statusCap(); };
+$('bImpOk').onclick = async () => {
+  if (!pendiente?.length) return;
+  for (const c of pendiente) {
+    const v = montos[c.id] || (montos[c.id] = { m: Array(12).fill(0), nota: '' });
+    v.m = c.m.slice(); if (c.nota !== undefined) v.nota = c.nota; dirty.add(c.id);
+  }
+  const n = pendiente.length; pendiente = null; $('impBox').classList.add('hidden');
+  buildGrid();
+  if (await guardar()) say(`Se cargaron y guardaron ${n} partida(s) desde Excel.`);
+};
+
+
+// ---------- agregar líneas ----------
+// áreas y CECO donde el usuario puede dar de alta (los mismos donde puede capturar y que no estén enviados)
+function areasAlta() {
+  const ks = cur === TODAS ? AREAS.map(a => a.k) : [cur];
+  return ks.filter(k => cecosAlta(k).length);
+}
+function cecosAlta(k) {
+  return Object.keys(DEP).sort().filter(c => (ceco ? c === ceco : true) &&
+    (admin || (misAcc().some(a => a.rol === 'captura' && a.area === k && (!a.ceco || a.ceco === c)) && capt[k + '|' + c] !== 'enviado')));
+}
+function nlCecos() {
+  const k = $('nlArea').value;
+  $('nlCeco').innerHTML = cecosAlta(k).map(c => `<option value="${c}">${c} · ${esc(DEP[c] || '')}</option>`).join('');
+}
+$('bNueva').onclick = () => {
+  const ks = areasAlta();
+  $('nlArea').innerHTML = ks.map(k => `<option value="${k}">${esc(nombreArea(k))}</option>`).join('');
+  $('nlAreaL').classList.toggle('hidden', ks.length < 2);
+  $('nlRubro').innerHTML = [...new Set(LINEAS.filter(l => l.origen !== 'usuario').map(l => l.rubro))].map(r => `<option>${esc(r)}</option>`).join('');
+  const cuentas = {}; for (const l of LINEAS) if (l.cuenta && l.cuenta !== 'N/A') cuentas[l.cuenta] = l.descripcion || '';
+  $('nlCuentas').innerHTML = Object.entries(cuentas).sort().map(([k, d]) => `<option value="${esc(k)}">${esc(d)}</option>`).join('');
+  nlCecos(); $('fNueva').reset(); $('nlArea').value = ks[0]; nlCecos();
+  $('nlBox').classList.remove('hidden'); $('nlConcepto').focus(); say('', false, 'msgNl');
+};
+$('nlArea').onchange = nlCecos;
+$('nlCuenta').oninput = () => { const v = $('nlCuenta').value.trim(); const l = LINEAS.find(x => x.cuenta === v); if (l && !$('nlDesc').value) $('nlDesc').value = l.descripcion || ''; };
+$('bNlNo').onclick = () => $('nlBox').classList.add('hidden');
+$('fNueva').onsubmit = async e => {
+  e.preventDefault();
+  const row = { area: $('nlArea').value, rubro: $('nlRubro').value, concepto: $('nlConcepto').value.trim(), cuenta: $('nlCuenta').value.trim() || null,
+    descripcion: $('nlDesc').value.trim() || null, ceco: $('nlCeco').value, llenado_por: '-' };
+  if (!row.concepto) return say('Escribe el concepto.', true, 'msgNl');
+  if (!row.ceco) return say('Elige el departamento.', true, 'msgNl');
+  const dup = LINEAS.find(l => l.area === row.area && l.ceco === row.ceco && l.concepto === row.concepto.toUpperCase());
+  if (dup) return say('Ya existe esa partida para ese departamento.', true, 'msgNl');
+  say('Agregando…', false, 'msgNl');
+  const { data, error } = await sb.from('lineas').insert(row).select().single();
+  if (error) return say('No se pudo agregar: ' + (error.message.includes('row-level') ? 'no tienes permiso en esa área/departamento o ya fue enviada.' : error.message), true, 'msgNl');
+  LINEAS.push(data); ordenar();
+  if (!AREAS.some(a => a.k === data.area)) return cargar();
+  $('nlBox').classList.add('hidden');
+  buildGrid(); statusCap();
+  say(`Línea agregada: ${data.concepto} (${data.ceco}). Captura sus importes y guarda.`);
+  const inp = document.querySelector(`tr[data-id="${data.id}"] input[data-m="0"]`);
+  if (inp) { inp.closest('tr').classList.remove('hide'); inp.scrollIntoView({ block: 'center' }); inp.focus(); }
+};
+$('grid').addEventListener('click', async e => {
+  const b = e.target.closest('[data-quitar]'); if (!b) return;
+  if (b.dataset.c !== '1') { b.dataset.c = '1'; b.textContent = '¿Quitar con sus importes?'; setTimeout(() => { b.dataset.c = ''; b.textContent = 'Quitar línea'; }, 4000); return; }
+  const id = +b.dataset.quitar;
+  const { error, count } = await sb.from('lineas').delete({ count: 'exact' }).eq('id', id);
+  if (error || !count) return say('No se pudo quitar la línea' + (error ? ': ' + error.message : ' (sin permiso o ya enviada).'), true);
+  LINEAS = LINEAS.filter(l => l.id !== id); delete montos[id]; dirty.delete(id); ordenar();
+  buildGrid(); statusCap(); say('Línea quitada.');
+});
 
 // ---------- navegación ----------
 function route() {
@@ -398,7 +570,7 @@ $('bReopen').onclick = async () => {
   await cargar(); say('Captura reabierta.');
 };
 $('bReload').onclick = async () => { if (dirty.size && !await confirma('bReload', 'Perderás cambios. ¿Recargar?')) return; await cargar(); };
-$('bXA').onclick = () => exportX(lineasVista(), `Presupuesto_${EJ}_${nombreArea(cur).replace(/[^A-Za-z0-9]+/g, '_')}${ceco ? '_' + ceco : ''}.xlsx`, false);
+$('bXA').onclick = () => exportX(lineasVista(), `Plantilla_${EJ}_${nombreArea(cur).replace(/[^A-Za-z0-9]+/g, '_')}${ceco ? '_' + ceco : ''}.xlsx`, false);
 $('bXT').onclick = () => exportX(LINEAS, `Presupuesto_${EJ}_Consolidado.xlsx`, true);
 window.addEventListener('beforeunload', e => { if (dirty.size) { e.preventDefault(); e.returnValue = ''; } });
 }
