@@ -46,5 +46,14 @@ mientras la captura siga abierta. Las líneas del formato original no se pueden 
   acumulado o solo el mes; variación (real − presupuesto) en $ y %, % ejercido del anual, gráfica mensual,
   detalle por rubro y partida, resúmenes por área y departamento, y exportación a Excel.
 
+## Catálogo 2027 (versión del 23-nov-2026)
+- Partidas y montos cargados de la hoja **Opex_GMD_Concentrado** del archivo
+  `00. Presupuesto de gastos - Globaltech 2027`: 278 partidas segregadas por CECO, 12 meses, total $90,602,023.
+  El ID de cada partida es su fila en esa hoja, así que el mismo archivo se puede volver a cargar con "Cargar Excel".
+- Catálogo de cuentas de resultados (4000–9000) de la hoja **C_Cuentas**.
+- Área **Ventas** disponible para accesos y líneas.
+- El administrador puede **editar** cualquier dato de una línea (área, rubro, concepto, cuenta, descripción, CECO)
+  y quitar cualquier línea.
+
 ## Base de datos
 Migraciones en `supabase/migrations/`, función en `supabase/functions/cuentas/`.

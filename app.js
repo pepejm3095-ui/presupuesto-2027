@@ -13,7 +13,7 @@ const ESTX = {ini:'Sin iniciar', cap:'En captura', par:'Envío parcial', env:'En
 
 const sb = window.supabase.createClient(window.CONFIG.url, window.CONFIG.key);
 let me = null, accesos = [], admin = false;
-let AREAS = [], DEP = {}, LINEAS = [], byId = {};
+let AREAS = [], AREAS_ALL = [], DEP = {}, LINEAS = [], byId = {}, CUENTAS = [];
 // Dos juegos de datos: presupuesto y gasto real. `montos` y `dirty` apuntan al de la pestaña activa.
 const store = { ppto: { data: {}, dirty: new Set() }, real: { data: {}, dirty: new Set() } };
 let montos = store.ppto.data;   // linea_id -> {m:[12], nota}
@@ -90,7 +90,7 @@ async function todo(q) { // pagina más allá de 1000 filas
 async function cargar() {
   show('vApp'); $('who').textContent = me; say('Cargando…');
   try {
-    const [acc, ar, dp, li, mo, ca, re, ej] = await Promise.all([
+    const [acc, ar, dp, li, mo, ca, re, ej, cu] = await Promise.all([
       todo(() => sb.from('accesos').select('*').order('email')),
       todo(() => sb.from('areas').select('*').order('orden')),
       todo(() => sb.from('departamentos').select('*').order('ceco')),
@@ -99,12 +99,14 @@ async function cargar() {
       todo(() => sb.from('capturas').select('area,ceco,estado').eq('ejercicio', EJ)),
       todo(() => sb.from('reales').select('linea_id,m,nota,actualizado,actualizado_por').eq('ejercicio', EJ)),
       todo(() => sb.from('ejercicios').select('mes_cierre').eq('ejercicio', EJ)),
+      todo(() => sb.from('cuentas').select('codigo,nombre,tipo').order('codigo')),
     ]);
     accesos = acc; admin = acc.some(a => a.email === me && a.rol === 'admin');
     DEP = Object.fromEntries(dp.map(d => [d.ceco, d.nombre]));
     LINEAS = li; ordenar();
     const visibles = new Set(li.map(l => l.area));
-    AREAS = ar.filter(a => visibles.has(a.k));
+    AREAS_ALL = ar; CUENTAS = cu;
+    AREAS = admin ? ar : ar.filter(a => visibles.has(a.k));
     const aMapa = rows => { const o = {}; for (const r of rows) o[r.linea_id] = { m: r.m.map(Number), nota: r.nota || '', ts: r.actualizado, por: r.actualizado_por }; return o; };
     store.ppto.data = aMapa(mo); store.real.data = aMapa(re);
     store.ppto.dirty.clear(); store.real.dirty.clear();
@@ -122,13 +124,15 @@ async function cargar() {
 }
 
 function ordenar() {
-  const max = {};
-  for (const l of LINEAS) if (l.origen !== 'usuario') max[l.rubro] = Math.max(max[l.rubro] || 0, l.id);
+  // las líneas se agrupan por rubro (en el orden del formato) y dentro del rubro por su fila; las agregadas van al final de su rubro
+  const max = {}, ord = {};
+  for (const l of LINEAS) if (l.origen !== 'usuario') { max[l.rubro] = Math.max(max[l.rubro] || 0, l.id); ord[l.rubro] = Math.min(ord[l.rubro] ?? 1e9, l.id); }
+  for (const l of LINEAS) if (ord[l.rubro] === undefined) ord[l.rubro] = 1e9 + l.id;
   const key = l => l.origen === 'usuario' ? (max[l.rubro] ?? 1e9) + l.id / 1e7 : l.id;
-  LINEAS.sort((a, b) => key(a) - key(b));
+  LINEAS.sort((a, b) => (ord[a.rubro] - ord[b.rubro]) || (key(a) - key(b)));
   byId = Object.fromEntries(LINEAS.map(l => [l.id, l]));
 }
-const borrable = l => l.origen === 'usuario' && editablePpto(l);
+const borrable = l => admin || (l.origen === 'usuario' && editablePpto(l));
 
 // ---------- estado y totales ----------
 function lineasArea(k) { return k === TODAS ? LINEAS : LINEAS.filter(l => l.area === k); }
@@ -185,7 +189,7 @@ function row(l, gid) {
   const v = val(l.id), tot = sum(v.m), dep = DEP[l.ceco] || '', ro = editable(l) ? '' : 'disabled';
   const tag = l.llenado_por === 'OPERACIONES/VENTAS' ? ' · Operaciones/Ventas' : '';
   const q = (l.concepto + ' ' + (l.descripcion || '') + ' ' + (l.cuenta || '') + ' ' + l.ceco + ' ' + dep + ' ' + l.rubro).toLowerCase();
-  return `<tr data-id="${l.id}" data-q="${esc(q)}" class="${gid ? 'kid hide' : ''}" ${gid ? `data-p="${gid}"` : ''}><td class="c">${esc(gid ? dep || l.ceco : l.concepto)}<small>${esc(gid ? l.descripcion : [l.cuenta, l.descripcion].filter(Boolean).join(' · ') || 'Sin cuenta asignada')}${tag}${cur === TODAS ? ' · ' + esc(nombreArea(l.area)) : ''}${cerrado(l) ? ' · enviado' : ''}${l.origen === 'usuario' ? ' · línea agregada por ' + esc(l.creada_por || '') : ''}</small>${borrable(l) ? `<button class="btn sm warn quitar" type="button" data-quitar="${l.id}">Quitar línea</button>` : ''}</td><td class="ceco">${esc(l.ceco)}</td>` +
+  return `<tr data-id="${l.id}" data-q="${esc(q)}" class="${gid ? 'kid hide' : ''}" ${gid ? `data-p="${gid}"` : ''}><td class="c">${esc(gid ? dep || l.ceco : l.concepto)}<small>${esc(gid ? l.descripcion : [l.cuenta, l.descripcion].filter(Boolean).join(' · ') || 'Sin cuenta asignada')}${tag}${cur === TODAS ? ' · ' + esc(nombreArea(l.area)) : ''}${cerrado(l) ? ' · enviado' : ''}${l.origen === 'usuario' ? ' · línea agregada por ' + esc(l.creada_por || '') : ''}</small>${admin || borrable(l) ? `<span class="acc-lin">${admin ? `<button class="btn sm quitar" type="button" data-editar="${l.id}">Editar</button>` : ''}${borrable(l) ? `<button class="btn sm warn quitar" type="button" data-quitar="${l.id}">Quitar</button>` : ''}</span>` : ''}</td><td class="ceco">${esc(l.ceco)}</td>` +
     MES.map((_, i) => `<td class="n"><input inputmode="decimal" data-id="${l.id}" data-m="${i}" value="${v.m[i] ? fmt2.format(v.m[i]) : ''}" class="${v.m[i] ? 'has' : ''}" aria-label="${esc(l.concepto)} ${esc(l.ceco)} ${MES[i]}" ${ro}></td>`).join('') +
     `<td class="n t"><input inputmode="decimal" data-id="${l.id}" data-m="12" value="${tot ? fmt.format(tot) : ''}" aria-label="Total anual ${esc(l.concepto)} ${esc(l.ceco)}" ${ro}></td>` +
     `<td class="nt"><input data-id="${l.id}" data-m="nota" value="${esc(v.nota)}" aria-label="Nota ${esc(l.concepto)} ${esc(l.ceco)}" placeholder="${ro ? '' : 'Supuesto o comentario'}" ${ro}></td></tr>`;
@@ -297,7 +301,7 @@ function cons() {
 
 // ---------- accesos (administrador) ----------
 function accRender() {
-  const areaOpt = '<option value="">—</option>' + AREAS.map(a => `<option value="${a.k}">${esc(a.nombre)}</option>`).join('');
+  const areaOpt = '<option value="">—</option>' + AREAS_ALL.map(a => `<option value="${a.k}">${esc(a.nombre)}</option>`).join('');
   $('acArea').innerHTML = areaOpt;
   $('acCeco').innerHTML = '<option value="">Todos los departamentos</option>' + Object.entries(DEP).map(([k, v]) => `<option value="${k}">${k} · ${esc(v)}</option>`).join('');
   const an = Object.fromEntries(AREAS.map(a => [a.k, a.nombre]));
@@ -380,7 +384,8 @@ function celdaNum(c) {
 // Devuelve [{id, m:[12], nota?, fila}] y errores, a partir de la plantilla o del formato oficial
 function leerLibro(wb, conFormato) {
   const errores = [], filas = [];
-  for (const nombre of wb.SheetNames) {
+  const hojas = [...wb.SheetNames].sort((a, b) => (/concentrado/i.test(b) - /concentrado/i.test(a)));
+  for (const nombre of hojas) {
     const ws = wb.Sheets[nombre]; if (!ws['!ref']) continue;
     const rg = XLSX.utils.decode_range(ws['!ref']);
     const cel = (r, c) => ws[XLSX.utils.encode_cell({ r, c })];
@@ -411,7 +416,7 @@ function leerLibro(wb, conFormato) {
         for (let i = 0; i < 12; i++) { const x = celdaNum(cel(r, 9 + i)); if (x.err) { errores.push(`Fila ${id}, ${MES[i]}: "${x.err}" no es número`); ok = false; } m.push(x.n || 0); }
         if (ok) filas.push({ id, m, fila: id });
       }
-      return { formato: 'Formato oficial 2027', hoja: nombre, filas, errores };
+      return { formato: 'Formato de presupuesto 2027', hoja: nombre, filas, errores };
     }
   }
   return null;
@@ -480,25 +485,46 @@ function nlCecos() {
   const k = $('nlArea').value;
   $('nlCeco').innerHTML = cecosAlta(k).map(c => `<option value="${c}">${c} · ${esc(DEP[c] || '')}</option>`).join('');
 }
-$('bNueva').onclick = () => {
-  const ks = areasAlta();
-  $('nlArea').innerHTML = ks.map(k => `<option value="${k}">${esc(nombreArea(k))}</option>`).join('');
-  $('nlAreaL').classList.toggle('hidden', ks.length < 2);
-  $('nlRubro').innerHTML = [...new Set(LINEAS.filter(l => l.origen !== 'usuario').map(l => l.rubro))].map(r => `<option>${esc(r)}</option>`).join('');
-  const cuentas = {}; for (const l of LINEAS) if (l.cuenta && l.cuenta !== 'N/A') cuentas[l.cuenta] = l.descripcion || '';
-  $('nlCuentas').innerHTML = Object.entries(cuentas).sort().map(([k, d]) => `<option value="${esc(k)}">${esc(d)}</option>`).join('');
-  nlCecos(); $('fNueva').reset(); $('nlArea').value = ks[0]; nlCecos();
-  $('nlBox').classList.remove('hidden'); $('nlConcepto').focus(); say('', false, 'msgNl');
-};
-$('nlArea').onchange = nlCecos;
-$('nlCuenta').oninput = () => { const v = $('nlCuenta').value.trim(); const l = LINEAS.find(x => x.cuenta === v); if (l && !$('nlDesc').value) $('nlDesc').value = l.descripcion || ''; };
+let editId = null;
+const rubros = () => [...new Set(LINEAS.map(l => l.rubro))];
+function abrirForm(l) {
+  editId = l ? l.id : null;
+  const ks = l ? AREAS_ALL.map(a => a.k) : areasAlta();
+  $('nlArea').innerHTML = ks.map(k => `<option value="${k}">${esc(AREAS_ALL.find(a => a.k === k)?.nombre || k)}</option>`).join('');
+  $('nlAreaL').classList.toggle('hidden', !l && ks.length < 2);
+  $('nlRubros').innerHTML = rubros().map(r => `<option value="${esc(r)}">`).join('');
+  $('nlCuentas').innerHTML = CUENTAS.filter(c => c.tipo === 'Cuenta de Mayor').map(c => `<option value="${esc(c.codigo)}">${esc(c.nombre)}</option>`).join('');
+  $('fNueva').reset(); $('nlArea').value = l ? l.area : ks[0];
+  if (l) { $('nlCeco').innerHTML = Object.keys(DEP).sort().map(c => `<option value="${c}">${c} · ${esc(DEP[c])}</option>`).join(''); } else nlCecos();
+  if (l) { $('nlRubro').value = l.rubro; $('nlConcepto').value = l.concepto; $('nlCuenta').value = l.cuenta || ''; $('nlDesc').value = l.descripcion || ''; $('nlCeco').value = l.ceco; }
+  else $('nlRubro').value = rubros()[0] || '';
+  $('nlTitulo').textContent = l ? `Editar línea ${l.id}` : 'Agregar línea';
+  $('nlOk').textContent = l ? 'Guardar cambios' : 'Agregar';
+  $('nlBox').classList.remove('hidden'); $('nlBox').scrollIntoView({ block: 'nearest' }); $('nlConcepto').focus(); say('', false, 'msgNl');
+}
+$('bNueva').onclick = () => abrirForm(null);
+$('nlArea').onchange = () => { if (!editId) nlCecos(); };
+$('nlCuenta').oninput = () => { const v = $('nlCuenta').value.trim(); const c = CUENTAS.find(x => x.codigo === v); if (c) $('nlDesc').value = c.nombre; };
 $('bNlNo').onclick = () => $('nlBox').classList.add('hidden');
 $('fNueva').onsubmit = async e => {
   e.preventDefault();
-  const row = { area: $('nlArea').value, rubro: $('nlRubro').value, concepto: $('nlConcepto').value.trim(), cuenta: $('nlCuenta').value.trim() || null,
-    descripcion: $('nlDesc').value.trim() || null, ceco: $('nlCeco').value, llenado_por: '-' };
+  const row = { area: $('nlArea').value, rubro: $('nlRubro').value.trim().toUpperCase(), concepto: $('nlConcepto').value.trim(), cuenta: $('nlCuenta').value.trim() || null,
+    descripcion: $('nlDesc').value.trim() || null, ceco: $('nlCeco').value };
+  if (!row.rubro) return say('Escribe o elige el rubro.', true, 'msgNl');
+  if (!admin && !rubros().includes(row.rubro)) return say('Elige uno de los rubros existentes; para un rubro nuevo pide apoyo a Finanzas.', true, 'msgNl');
   if (!row.concepto) return say('Escribe el concepto.', true, 'msgNl');
   if (!row.ceco) return say('Elige el departamento.', true, 'msgNl');
+  if (row.cuenta && CUENTAS.length && !CUENTAS.some(c => c.codigo === row.cuenta) && row.cuenta !== 'N/A') return say('Esa cuenta no está en el catálogo de cuentas.', true, 'msgNl');
+  if (editId) {
+    say('Guardando…', false, 'msgNl');
+    const { data, error } = await sb.from('lineas').update(row).eq('id', editId).select().single();
+    if (error) return say('No se pudo guardar: ' + error.message, true, 'msgNl');
+    const i = LINEAS.findIndex(l => l.id === editId); LINEAS[i] = data; ordenar();
+    $('nlBox').classList.add('hidden'); editId = null;
+    if (!AREAS.some(a => a.k === data.area)) return cargar();
+    buildGrid(); statusCap(); return say(`Línea ${data.id} actualizada: ${data.concepto} (${data.ceco}, ${nombreArea(data.area)}).`);
+  }
+  row.llenado_por = '-';
   const dup = LINEAS.find(l => l.area === row.area && l.ceco === row.ceco && l.concepto === row.concepto.toUpperCase());
   if (dup) return say('Ya existe esa partida para ese departamento.', true, 'msgNl');
   say('Agregando…', false, 'msgNl');
@@ -513,8 +539,9 @@ $('fNueva').onsubmit = async e => {
   if (inp) { inp.closest('tr').classList.remove('hide'); inp.scrollIntoView({ block: 'center' }); inp.focus(); }
 };
 $('grid').addEventListener('click', async e => {
+  const ed = e.target.closest('[data-editar]'); if (ed) return abrirForm(byId[+ed.dataset.editar]);
   const b = e.target.closest('[data-quitar]'); if (!b) return;
-  if (b.dataset.c !== '1') { b.dataset.c = '1'; b.textContent = '¿Quitar con sus importes?'; setTimeout(() => { b.dataset.c = ''; b.textContent = 'Quitar línea'; }, 4000); return; }
+  if (b.dataset.c !== '1') { b.dataset.c = '1'; b.textContent = '¿Quitar con sus importes?'; setTimeout(() => { b.dataset.c = ''; b.textContent = 'Quitar'; }, 4000); return; }
   const id = +b.dataset.quitar;
   const { error, count } = await sb.from('lineas').delete({ count: 'exact' }).eq('id', id);
   if (error || !count) return say('No se pudo quitar la línea' + (error ? ': ' + error.message : ' (sin permiso o ya enviada).'), true);

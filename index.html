@@ -27,7 +27,7 @@ h1{font-size:clamp(28px,4vw,44px);line-height:1.05;margin:0 0 4px;text-wrap:bala
 .strip{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:2px;background:var(--line);border:2px solid var(--ink);margin-top:18px}
 .chip{all:unset;cursor:pointer;background:var(--panel);padding:12px 14px;display:flex;flex-direction:column;gap:2px;min-height:92px;position:relative}
 .chip:focus-visible{outline:3px solid var(--red);outline-offset:-3px}
-.chip b{font:600 14px "Inter Tight",sans-serif}
+.chip b{font:600 14px "Inter Tight",sans-serif;overflow-wrap:anywhere;hyphens:auto}
 .chip .amt{font:700 clamp(15px,1.5vw,20px) "Inter Tight",sans-serif;font-variant-numeric:tabular-nums;white-space:nowrap}
 .chip .st{font-size:12.5px;color:var(--mute);display:flex;align-items:center;gap:6px}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--red);flex:none}
@@ -114,7 +114,8 @@ td.nt input:focus{outline:2px solid var(--red);outline-offset:-2px;background:va
 .nl-form{grid-template-columns:repeat(3,minmax(0,1fr))}
 .nl-btns{display:flex;gap:8px;align-items:end}
 @media(max-width:800px){.nl-form{grid-template-columns:1fr}}
-button.quitar{display:block;margin-top:6px;min-height:30px;font-size:12.5px}
+.acc-lin{display:flex;gap:6px;margin-top:6px}
+button.quitar{min-height:30px;font-size:12.5px;padding:0 10px}
 .modos{display:flex;gap:0;margin-top:18px;border-bottom:2px solid var(--ink);flex-wrap:wrap}
 .modos button{all:unset;cursor:pointer;padding:10px 18px;font:600 15px "Inter Tight",sans-serif;min-height:24px}
 .modos button[aria-selected=true]{background:var(--ink);color:var(--bg)}
@@ -217,16 +218,17 @@ button.quitar{display:block;margin-top:6px;min-height:30px;font-size:12.5px}
     </div>
     <p class="msg" id="msg">Cargando…</p>
     <div id="nlBox" class="codbox hidden" style="max-width:none">
+      <h3 id="nlTitulo" style="margin:0 0 10px;font:700 18px 'Inter Tight',sans-serif">Agregar línea</h3>
       <form id="fNueva" class="acc-form nl-form">
         <label id="nlAreaL">Área<select class="field" id="nlArea"></select></label>
-        <label>Rubro<select class="field" id="nlRubro"></select></label>
+        <label>Rubro<input class="field" id="nlRubro" list="nlRubros" maxlength="80"></label>
         <label>Concepto<input class="field" id="nlConcepto" maxlength="120" required placeholder="Ej. LICENCIAS DE DISEÑO"></label>
         <label>Cuenta contable (opcional)<input class="field" id="nlCuenta" list="nlCuentas" maxlength="30" placeholder="6000-100-…"></label>
         <label>Descripción de la cuenta<input class="field" id="nlDesc" maxlength="120"></label>
         <label>Departamento (CECO)<select class="field" id="nlCeco"></select></label>
-        <div class="nl-btns"><button class="btn pri" type="submit">Agregar</button><button class="btn" id="bNlNo" type="button">Cancelar</button></div>
+        <div class="nl-btns"><button class="btn pri" id="nlOk" type="submit">Agregar</button><button class="btn" id="bNlNo" type="button">Cancelar</button></div>
       </form>
-      <datalist id="nlCuentas"></datalist>
+      <datalist id="nlCuentas"></datalist><datalist id="nlRubros"></datalist>
       <p class="msg" id="msgNl"></p>
     </div>
     <div id="impBox" class="codbox hidden" style="max-width:none">
