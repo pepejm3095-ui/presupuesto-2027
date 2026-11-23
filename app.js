@@ -103,13 +103,17 @@ async function cargar() {
     $('sinAcceso').classList.remove('hidden'); $('main').classList.add('hidden'); $('strip').innerHTML = ''; return;
   }
   $('sinAcceso').classList.add('hidden'); $('main').classList.remove('hidden');
-  if (!AREAS.some(a => a.k === cur)) cur = AREAS[0].k;
+  if (!AREAS.some(a => a.k === cur) && !(cur === TODAS && verTodas())) cur = admin ? TODAS : AREAS[0].k;
   route();
 }
 
 // ---------- estado y totales ----------
-function lineasArea(k) { return LINEAS.filter(l => l.area === k); }
+function lineasArea(k) { return k === TODAS ? LINEAS : LINEAS.filter(l => l.area === k); }
+const TODAS = 'todas';
+const nombreArea = k => k === TODAS ? 'Todas las áreas' : (AREAS.find(a => a.k === k)?.nombre || k);
+const verTodas = () => admin || AREAS.length > 1;
 function estado(k) {
+  if (k === TODAS) { const es = AREAS.map(a => estado(a.k)); if (es.every(e => e === 'env')) return 'env'; if (es.some(e => e === 'env' || e === 'par')) return 'par'; return es.some(e => e === 'cap') ? 'cap' : 'ini'; }
   const cecos = [...new Set(lineasArea(k).map(l => l.ceco))];
   const env = cecos.filter(c => capt[k + '|' + c] === 'enviado').length;
   if (env && env === cecos.length) return 'env';
@@ -120,12 +124,13 @@ const mesesDe = ls => { const m = Array(12).fill(0); for (const l of ls) { const
 
 function strip() {
   const dots = { ini: '', cap: 'cap', par: 'cap', env: 'env' };
-  let h = AREAS.map(a => {
+  const chips = verTodas() ? [{ k: TODAS, nombre: 'Todas las áreas' }, ...AREAS] : AREAS;
+  let h = chips.map(a => {
     const e = estado(a.k), t = sum(mesesDe(lineasArea(a.k)));
     const d = lineasArea(a.k).some(l => dirty.has(l.id));
     return `<button class="chip" type="button" data-k="${a.k}" aria-current="${view === 'cap' && cur === a.k}"><b>${esc(a.nombre)}${d ? ' •' : ''}</b><span class="amt">${money(t)}</span><span class="st"><i class="dot ${dots[e]}"></i>${ESTX[e]}</span></button>`;
   }).join('');
-  if (AREAS.length > 1 || admin) h += `<button class="chip all" type="button" data-k="consolidado" aria-current="${view === 'cons'}"><b>Consolidado</b><span class="amt">${money(sum(mesesDe(LINEAS)))}</span><span class="st">${AREAS.filter(a => estado(a.k) === 'env').length} de ${AREAS.length} áreas enviadas</span></button>`;
+  if (verTodas()) h += `<button class="chip all" type="button" data-k="consolidado" aria-current="${view === 'cons'}"><b>Consolidado</b><span class="amt">${money(sum(mesesDe(LINEAS)))}</span><span class="st">${AREAS.filter(a => estado(a.k) === 'env').length} de ${AREAS.length} áreas enviadas</span></button>`;
   if (admin) h += `<button class="chip all" type="button" data-k="accesos" aria-current="${view === 'acc'}"><b>Accesos</b><span class="amt">${new Set(accesos.map(a => a.email)).size}</span><span class="st">usuarios con acceso</span></button>`;
   $('strip').innerHTML = h;
 }
@@ -148,7 +153,7 @@ function buildGrid() {
       gl.forEach(x => h += row(x, gid));
     } else h += row(l, '');
   }
-  h += `</tbody><tfoot><tr><td class="c">Total ${esc(AREAS.find(a => a.k === cur)?.nombre)}${ceco ? ' · ' + esc(DEP[ceco]) : ''}</td><td></td>${MES.map((_, i) => `<td data-ft="${i}"></td>`).join('')}<td data-ft="12"></td><td></td></tr></tfoot></table>`;
+  h += `</tbody><tfoot><tr><td class="c">Total ${esc(nombreArea(cur))}${ceco ? ' · ' + esc(DEP[ceco]) : ''}</td><td></td>${MES.map((_, i) => `<td data-ft="${i}"></td>`).join('')}<td data-ft="12"></td><td></td></tr></tfoot></table>`;
   $('grid').innerHTML = h;
   filter(); totals();
 }
@@ -157,7 +162,7 @@ function row(l, gid) {
   const v = val(l.id), tot = sum(v.m), dep = DEP[l.ceco] || '', ro = editable(l) ? '' : 'disabled';
   const tag = l.llenado_por === 'OPERACIONES/VENTAS' ? ' · Operaciones/Ventas' : '';
   const q = (l.concepto + ' ' + (l.descripcion || '') + ' ' + (l.cuenta || '') + ' ' + l.ceco + ' ' + dep + ' ' + l.rubro).toLowerCase();
-  return `<tr data-id="${l.id}" data-q="${esc(q)}" class="${gid ? 'kid hide' : ''}" ${gid ? `data-p="${gid}"` : ''}><td class="c">${esc(gid ? dep || l.ceco : l.concepto)}<small>${esc(gid ? l.descripcion : [l.cuenta, l.descripcion].filter(Boolean).join(' · ') || 'Sin cuenta asignada')}${tag}${cerrado(l) ? ' · enviado' : ''}</small></td><td class="ceco">${esc(l.ceco)}</td>` +
+  return `<tr data-id="${l.id}" data-q="${esc(q)}" class="${gid ? 'kid hide' : ''}" ${gid ? `data-p="${gid}"` : ''}><td class="c">${esc(gid ? dep || l.ceco : l.concepto)}<small>${esc(gid ? l.descripcion : [l.cuenta, l.descripcion].filter(Boolean).join(' · ') || 'Sin cuenta asignada')}${tag}${cur === TODAS ? ' · ' + esc(nombreArea(l.area)) : ''}${cerrado(l) ? ' · enviado' : ''}</small></td><td class="ceco">${esc(l.ceco)}</td>` +
     MES.map((_, i) => `<td class="n"><input inputmode="decimal" data-id="${l.id}" data-m="${i}" value="${v.m[i] ? fmt2.format(v.m[i]) : ''}" class="${v.m[i] ? 'has' : ''}" aria-label="${esc(l.concepto)} ${esc(l.ceco)} ${MES[i]}" ${ro}></td>`).join('') +
     `<td class="n t"><input inputmode="decimal" data-id="${l.id}" data-m="12" value="${tot ? fmt.format(tot) : ''}" aria-label="Total anual ${esc(l.concepto)} ${esc(l.ceco)}" ${ro}></td>` +
     `<td class="nt"><input data-id="${l.id}" data-m="nota" value="${esc(v.nota)}" aria-label="Nota ${esc(l.concepto)} ${esc(l.ceco)}" placeholder="${ro ? '' : 'Supuesto o comentario'}" ${ro}></td></tr>`;
@@ -211,16 +216,16 @@ function filter() {
 }
 function statusCap() {
   if (view !== 'cap') return;
-  const ls = lineasVista(), area = AREAS.find(a => a.k === cur);
+  const ls = lineasVista();
   const puede = ls.some(puedeEditar), e = estado(cur);
   let ult = null; for (const l of ls) { const v = montos[l.id]; if (v?.ts && (!ult || v.ts > ult.ts)) ult = v; }
   say(dirty.size ? `Hay ${dirty.size} partida(s) con cambios sin guardar.` :
     (ult ? `Última modificación ${new Date(ult.ts).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })} por ${ult.por}.` : 'Aún no hay montos capturados.') +
     (!puede ? ' Acceso de solo consulta.' : ''));
-  $('bSend').classList.toggle('hidden', !puede || e === 'env');
-  $('bReopen').classList.toggle('hidden', !admin || (e !== 'env' && e !== 'par'));
+  $('bSend').classList.toggle('hidden', cur === TODAS || !puede || e === 'env');
+  $('bReopen').classList.toggle('hidden', cur === TODAS || !admin || (e !== 'env' && e !== 'par'));
   $('bSave').classList.toggle('hidden', !ls.some(editable));
-  $('tArea').textContent = area?.nombre || '';
+  $('tArea').textContent = nombreArea(cur);
   $('estadoArea').textContent = ESTX[e];
 }
 async function guardar() {
@@ -333,7 +338,7 @@ function route() {
   const h = location.hash.slice(1);
   if (h === 'consolidado') view = 'cons';
   else if (h === 'accesos' && admin) view = 'acc';
-  else { view = 'cap'; if (AREAS.some(a => a.k === h) && h !== cur) { cur = h; ceco = ''; $('q').value = ''; } }
+  else { view = 'cap'; if ((AREAS.some(a => a.k === h) || (h === TODAS && verTodas())) && h !== cur) { cur = h; ceco = ''; $('q').value = ''; } }
   for (const [v, id] of [['cap', 'vCap'], ['cons', 'vCons'], ['acc', 'vAcc']]) $(id).classList.toggle('hidden', v !== view);
   if (view === 'cap') {
     const cecos = [...new Set(lineasArea(cur).map(l => l.ceco))].sort();
@@ -393,7 +398,7 @@ $('bReopen').onclick = async () => {
   await cargar(); say('Captura reabierta.');
 };
 $('bReload').onclick = async () => { if (dirty.size && !await confirma('bReload', 'Perderás cambios. ¿Recargar?')) return; await cargar(); };
-$('bXA').onclick = () => exportX(lineasVista(), `Presupuesto_${EJ}_${(AREAS.find(a => a.k === cur)?.nombre || cur).replace(/\W+/g, '_')}${ceco ? '_' + ceco : ''}.xlsx`, false);
+$('bXA').onclick = () => exportX(lineasVista(), `Presupuesto_${EJ}_${nombreArea(cur).replace(/[^A-Za-z0-9]+/g, '_')}${ceco ? '_' + ceco : ''}.xlsx`, false);
 $('bXT').onclick = () => exportX(LINEAS, `Presupuesto_${EJ}_Consolidado.xlsx`, true);
 window.addEventListener('beforeunload', e => { if (dirty.size) { e.preventDefault(); e.returnValue = ''; } });
 }
