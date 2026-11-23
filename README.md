@@ -1,0 +1,32 @@
+# Presupuesto de gastos de operación 2027 · Global Tech
+
+Página para que cada área capture su presupuesto mensual 2027 con base en el formato
+`Formato_2027_Presupuesto_de_gastos.xlsx` (509 partidas).
+
+## Cómo está armado
+- **Página estática** (`index.html`, `app.js`, `config.js`, `vendor/`) publicada en Netlify.
+- **Supabase** guarda la captura y controla el acceso:
+  - `lineas`: catálogo del formato (rubro, concepto, cuenta, CECO, área que llena).
+  - `montos`: 12 meses + nota por partida y ejercicio.
+  - `capturas`: estado (captura / enviado) por área y departamento.
+  - `accesos`: quién puede hacer qué.
+- **Función `cuentas`** (Edge Function): activa cuentas con un código que genera un administrador.
+
+## Accesos
+| Rol | Qué puede hacer |
+|---|---|
+| admin | Ve y edita todo, reabre capturas, da accesos |
+| captura | Edita las partidas de su área ("Llenado por"); si se le asigna un CECO, solo ese departamento |
+| consulta | Ve sin editar todas las partidas de un departamento (CECO) |
+
+Las reglas se validan en la base de datos (Row Level Security), no solo en la página.
+
+## Alta de un usuario
+1. Administrador → **Accesos** → agrega correo, rol, área y departamento.
+2. **Generar código** y entregárselo al usuario.
+3. El usuario entra a la página → **Activar cuenta** → correo + código + su contraseña.
+
+El mismo código sirve para restablecer una contraseña olvidada.
+
+## Base de datos
+Migraciones en `supabase/migrations/`, función en `supabase/functions/cuentas/`.
