@@ -1,3 +1,4 @@
+-- Aplicado en el proyecto Supabase existente (qqbirpskkhwwsdbkbzyg)
 -- Presupuesto de gastos de operación · esquema base
 create table public.areas (
   k text primary key,

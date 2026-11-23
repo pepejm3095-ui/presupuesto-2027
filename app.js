@@ -200,7 +200,7 @@ function totals() {
 function filter() {
   const q = $('q').value.trim().toLowerCase(), tb = $('tb'); if (!tb) return;
   const open = new Set([...tb.querySelectorAll('tr.grp.open')].map(r => r.dataset.g)), vis = {};
-  tb.querySelectorAll('tr[data-id]').forEach(r => { const hit = !q || r.dataset.q.includes(q), p = r.dataset.p; if (hit && p) vis[p] = true; r.classList.toggle('hide', !hit || (p && !q && !open.has(p))); r.dataset.hit = hit ? 1 : 0; });
+  tb.querySelectorAll('tr[data-id]').forEach(r => { const hit = !q || r.dataset.q.includes(q), p = r.dataset.p; if (hit && p) vis[p] = true; r.classList.toggle('hide', !hit || !!(p && !q && !open.has(p))); r.dataset.hit = hit ? 1 : 0; });
   let any = false, secRow = null;
   [...tb.tBodies[0].rows].forEach(r => {
     if (r.classList.contains('sec')) { if (secRow) secRow.classList.toggle('hide', !any); secRow = r; any = false; return; }
