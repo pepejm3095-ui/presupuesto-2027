@@ -38,5 +38,13 @@ Usuarios con rol captura (en su área/departamento, mientras no esté enviada) y
 **Agregar línea** (rubro, concepto, cuenta opcional, CECO). Reciben ID desde 100000 y se pueden quitar
 mientras la captura siga abierta. Las líneas del formato original no se pueden quitar.
 
+## Real y comparativo
+- **Real** (solo administradores): misma tabla de captura con el gasto real mensual por partida; se puede
+  capturar, pegar o cargar con su plantilla de Excel. El **mes de cierre** define hasta qué mes las áreas
+  ven el comparativo.
+- **Comparativo** (todos, sobre las partidas que cada quien ve): presupuesto vs real al mes de corte,
+  acumulado o solo el mes; variación (real − presupuesto) en $ y %, % ejercido del anual, gráfica mensual,
+  detalle por rubro y partida, resúmenes por área y departamento, y exportación a Excel.
+
 ## Base de datos
 Migraciones en `supabase/migrations/`, función en `supabase/functions/cuentas/`.

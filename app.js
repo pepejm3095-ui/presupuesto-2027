@@ -5,7 +5,8 @@ const MES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','
 const $ = s => document.getElementById(s);
 const fmt = new Intl.NumberFormat('es-MX', {maximumFractionDigits: 0});
 const fmt2 = new Intl.NumberFormat('es-MX', {maximumFractionDigits: 2});
-const money = v => '$' + fmt.format(Math.round(v));
+const money = v => (Math.round(v) < 0 ? '−$' : '$') + fmt.format(Math.abs(Math.round(v)));
+const slug = t => String(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '_');
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const sum = a => (a || []).reduce((s, x) => s + (+x || 0), 0);
 const ESTX = {ini:'Sin iniciar', cap:'En captura', par:'Envío parcial', env:'Enviado'};
@@ -13,16 +14,23 @@ const ESTX = {ini:'Sin iniciar', cap:'En captura', par:'Envío parcial', env:'En
 const sb = window.supabase.createClient(window.CONFIG.url, window.CONFIG.key);
 let me = null, accesos = [], admin = false;
 let AREAS = [], DEP = {}, LINEAS = [], byId = {};
-let montos = {};    // linea_id -> {m:[12], nota}
+// Dos juegos de datos: presupuesto y gasto real. `montos` y `dirty` apuntan al de la pestaña activa.
+const store = { ppto: { data: {}, dirty: new Set() }, real: { data: {}, dirty: new Set() } };
+let montos = store.ppto.data;   // linea_id -> {m:[12], nota}
+let dirty = store.ppto.dirty;
+let modo = 'ppto';              // ppto | real | comp
+let cierre = 0, corte = 0;      // último mes cerrado con real; mes elegido en el comparativo
+try { const m = localStorage.getItem('modo'); if (['ppto', 'real', 'comp'].includes(m)) modo = m; } catch {}
+function usarStore() { const x = store[modo === 'real' ? 'real' : 'ppto']; montos = x.data; dirty = x.dirty; }
 let capt = {};      // `${area}|${ceco}` -> estado
-let dirty = new Set();
 let cur = null, ceco = '', view = 'cap', rowsOrder = [];
 
 // ---------- utilidades de permisos (la base de datos los vuelve a validar) ----------
 const misAcc = () => accesos.filter(a => a.email === me);
 const puedeEditar = l => admin || misAcc().some(a => a.rol === 'captura' && a.area === l.area && (!a.ceco || a.ceco === l.ceco));
 const cerrado = l => capt[l.area + '|' + l.ceco] === 'enviado';
-const editable = l => admin || (puedeEditar(l) && !cerrado(l));
+const editablePpto = l => admin || (puedeEditar(l) && !cerrado(l));
+const editable = l => modo === 'real' ? admin : editablePpto(l);
 const val = id => montos[id] || {m: Array(12).fill(0), nota: ''};
 
 function say(t, err, el = 'msg') { const n = $(el); if (!n) return; n.textContent = t; n.classList.toggle('err', !!err); }
@@ -82,22 +90,28 @@ async function todo(q) { // pagina más allá de 1000 filas
 async function cargar() {
   show('vApp'); $('who').textContent = me; say('Cargando…');
   try {
-    const [acc, ar, dp, li, mo, ca] = await Promise.all([
+    const [acc, ar, dp, li, mo, ca, re, ej] = await Promise.all([
       todo(() => sb.from('accesos').select('*').order('email')),
       todo(() => sb.from('areas').select('*').order('orden')),
       todo(() => sb.from('departamentos').select('*').order('ceco')),
       todo(() => sb.from('lineas').select('*').order('id')),
       todo(() => sb.from('montos').select('linea_id,m,nota,actualizado,actualizado_por').eq('ejercicio', EJ)),
       todo(() => sb.from('capturas').select('area,ceco,estado').eq('ejercicio', EJ)),
+      todo(() => sb.from('reales').select('linea_id,m,nota,actualizado,actualizado_por').eq('ejercicio', EJ)),
+      todo(() => sb.from('ejercicios').select('mes_cierre').eq('ejercicio', EJ)),
     ]);
     accesos = acc; admin = acc.some(a => a.email === me && a.rol === 'admin');
     DEP = Object.fromEntries(dp.map(d => [d.ceco, d.nombre]));
     LINEAS = li; ordenar();
     const visibles = new Set(li.map(l => l.area));
     AREAS = ar.filter(a => visibles.has(a.k));
-    montos = {}; for (const r of mo) montos[r.linea_id] = { m: r.m.map(Number), nota: r.nota || '', ts: r.actualizado, por: r.actualizado_por };
+    const aMapa = rows => { const o = {}; for (const r of rows) o[r.linea_id] = { m: r.m.map(Number), nota: r.nota || '', ts: r.actualizado, por: r.actualizado_por }; return o; };
+    store.ppto.data = aMapa(mo); store.real.data = aMapa(re);
+    store.ppto.dirty.clear(); store.real.dirty.clear();
+    cierre = ej[0]?.mes_cierre || 0;
+    if (modo === 'real' && !admin) modo = 'comp';
+    usarStore();
     capt = {}; for (const c of ca) capt[c.area + '|' + c.ceco] = c.estado;
-    dirty.clear();
   } catch (e) { say('No se pudo cargar la información: ' + e.message, true); return; }
   if (!LINEAS.length) {
     $('sinAcceso').classList.remove('hidden'); $('main').classList.add('hidden'); $('strip').innerHTML = ''; return;
@@ -114,7 +128,7 @@ function ordenar() {
   LINEAS.sort((a, b) => key(a) - key(b));
   byId = Object.fromEntries(LINEAS.map(l => [l.id, l]));
 }
-const borrable = l => l.origen === 'usuario' && editable(l);
+const borrable = l => l.origen === 'usuario' && editablePpto(l);
 
 // ---------- estado y totales ----------
 function lineasArea(k) { return k === TODAS ? LINEAS : LINEAS.filter(l => l.area === k); }
@@ -127,7 +141,7 @@ function estado(k) {
   const env = cecos.filter(c => capt[k + '|' + c] === 'enviado').length;
   if (env && env === cecos.length) return 'env';
   if (env) return 'par';
-  return lineasArea(k).some(l => montos[l.id]) ? 'cap' : 'ini';
+  return lineasArea(k).some(l => store.ppto.data[l.id]) ? 'cap' : 'ini';
 }
 const mesesDe = ls => { const m = Array(12).fill(0); for (const l of ls) { const v = montos[l.id]; if (v) v.m.forEach((x, i) => m[i] += +x || 0); } return m; };
 
@@ -230,13 +244,16 @@ function statusCap() {
   let ult = null; for (const l of ls) { const v = montos[l.id]; if (v?.ts && (!ult || v.ts > ult.ts)) ult = v; }
   say(dirty.size ? `Hay ${dirty.size} partida(s) con cambios sin guardar.` :
     (ult ? `Última modificación ${new Date(ult.ts).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' })} por ${ult.por}.` : 'Aún no hay montos capturados.') +
-    (!puede ? ' Acceso de solo consulta.' : ''));
-  $('bSend').classList.toggle('hidden', cur === TODAS || !puede || e === 'env');
-  $('bReopen').classList.toggle('hidden', cur === TODAS || !admin || (e !== 'env' && e !== 'par'));
+    (!puede && modo !== 'real' ? ' Acceso de solo consulta.' : ''));
+  const real = modo === 'real';
+  $('bSend').classList.toggle('hidden', real || cur === TODAS || !puede || e === 'env');
+  $('bReopen').classList.toggle('hidden', real || cur === TODAS || !admin || (e !== 'env' && e !== 'par'));
+  $('lCierre').classList.toggle('hidden', !real || !admin);
+  $('fCierre').value = String(cierre);
   $('bSave').classList.toggle('hidden', !ls.some(editable));
   $('bNueva').classList.toggle('hidden', !areasAlta().length);
-  $('tArea').textContent = nombreArea(cur);
-  $('estadoArea').textContent = ESTX[e];
+  $('tArea').textContent = (real ? 'Real · ' : '') + nombreArea(cur);
+  $('estadoArea').textContent = real ? (cierre ? 'Cerrado a ' + MES[cierre - 1] : 'Sin mes cerrado') : ESTX[e];
 }
 async function guardar() {
   if (!dirty.size) return true;
@@ -248,8 +265,9 @@ async function guardar() {
   }
   $('bSave').disabled = true; say('Guardando…');
   try {
-    if (up.length) { const { error } = await sb.from('montos').upsert(up, { onConflict: 'ejercicio,linea_id' }); if (error) throw error; }
-    if (del.length) { const { error } = await sb.from('montos').delete().eq('ejercicio', EJ).in('linea_id', del); if (error) throw error; }
+    const tabla = modo === 'real' ? 'reales' : 'montos';
+    if (up.length) { const { error } = await sb.from(tabla).upsert(up, { onConflict: 'ejercicio,linea_id' }); if (error) throw error; }
+    if (del.length) { const { error } = await sb.from(tabla).delete().eq('ejercicio', EJ).in('linea_id', del); if (error) throw error; }
     dirty.clear();
     for (const id of del) delete montos[id];
     const ahora = new Date().toISOString(); for (const r of up) Object.assign(montos[r.linea_id], { ts: ahora, por: me });
@@ -331,7 +349,7 @@ function exportX(ls, name, conResumen) {
   const head = ['ID', 'Rubro', 'Concepto', 'Cuenta', 'Descripción cuenta contable', 'CECO', 'Departamento', 'Llenado por', ...MES.map(m => m + ' ' + EJ), 'Total ' + EJ, 'Nota'];
   const rows = ls.map(l => { const v = val(l.id); return [l.id, l.rubro, l.concepto, l.cuenta || '', l.descripcion || '', l.ceco, DEP[l.ceco] || '', l.llenado_por, ...v.m.map(x => +x || 0), 0, v.nota]; });
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([[window.CONFIG.empresa], ['PRESUPUESTO GASTOS DE OPERACIÓN · EJERCICIO ' + EJ],
+  const ws = XLSX.utils.aoa_to_sheet([[window.CONFIG.empresa], [(modo === 'real' ? 'GASTO REAL DE OPERACIÓN' : 'PRESUPUESTO GASTOS DE OPERACIÓN') + ' · EJERCICIO ' + EJ],
     ['Captura los importes en pesos sin IVA en las columnas de los meses y vuelve a subir este archivo con "Cargar Excel". No cambies la columna ID.'], head, ...rows]);
   const H = 4; // filas antes de los datos
   rows.forEach((_, i) => {
@@ -360,7 +378,7 @@ function celdaNum(c) {
   const n = parseNum(c.v); return isNaN(n) ? { err: String(c.v) } : { n: Math.round(n * 100) / 100 };
 }
 // Devuelve [{id, m:[12], nota?, fila}] y errores, a partir de la plantilla o del formato oficial
-function leerLibro(wb) {
+function leerLibro(wb, conFormato) {
   const errores = [], filas = [];
   for (const nombre of wb.SheetNames) {
     const ws = wb.Sheets[nombre]; if (!ws['!ref']) continue;
@@ -382,7 +400,7 @@ function leerLibro(wb) {
     // 2) Formato oficial: meses ENERO..DICIEMBRE en J..U (fila 6); el número de fila es el ID
     let fm = -1;
     for (let r = 0; r <= Math.min(rg.e.r, 15); r++) if (norm(cel(r, 9)?.v) === 'ENERO' && norm(cel(r, 20)?.v) === 'DICIEMBRE') { fm = r; break; }
-    if (fm >= 0) {
+    if (fm >= 0 && conFormato) {
       for (let r = fm + 1; r <= rg.e.r; r++) {
         const id = r + 1, l = byId[id]; if (!l) continue;
         const concepto = norm(cel(r, 2)?.v);
@@ -402,8 +420,8 @@ let pendiente = null;
 async function cargarArchivo(f) {
   say('Leyendo ' + f.name + '…');
   let wb; try { wb = XLSX.read(await f.arrayBuffer(), { cellFormula: false }); } catch { return say('No pude leer el archivo. ¿Es un Excel (.xlsx o .xls)?', true); }
-  const r = leerLibro(wb);
-  if (!r) return say('No reconozco el archivo: usa la plantilla que descargas con "Descargar plantilla" o el formato oficial de presupuesto 2027 sin modificar columnas.', true);
+  const r = leerLibro(wb, modo !== 'real');
+  if (!r) return say(modo === 'real' ? 'No reconozco el archivo: para el real usa la plantilla que descargas con "Descargar plantilla" en la pestaña Real.' : 'No reconozco el archivo: usa la plantilla que descargas con "Descargar plantilla" o el formato oficial de presupuesto 2027 sin modificar columnas.', true);
   const visibles = new Set(lineasVista().map(l => l.id));
   const cambios = [], sinPermiso = [], fuera = [];
   for (const x of r.filas) {
@@ -418,7 +436,7 @@ async function cargarArchivo(f) {
   const antes = sum(cambios.map(c => c.antes)), despues = sum(cambios.map(c => c.despues));
   const lista = cambios.slice(0, 200).map(c => { const l = byId[c.id]; return `<tr><td>${c.fila}</td><td>${esc(l.concepto)}<small> · ${esc(l.ceco)} ${esc(DEP[l.ceco] || '')}</small></td><td>${fmt.format(c.antes)}</td><td><b>${fmt.format(c.despues)}</b></td></tr>`; }).join('');
   $('impBox').classList.remove('hidden');
-  $('impRes').innerHTML = `<p><b>${esc(f.name)}</b> · ${r.formato} (hoja "${esc(r.hoja)}")</p>
+  $('impRes').innerHTML = `<p><b>${esc(f.name)}</b> · ${modo === 'real' ? '<b>Gasto real</b> · ' : ''}${r.formato} (hoja "${esc(r.hoja)}")</p>
     <p class="num-big" style="font-size:22px;margin:4px 0">${cambios.length} partida(s) con cambios · ${money(antes)} → ${money(despues)}</p>
     <ul class="help" style="margin:6px 0 10px">
       ${fuera.length ? `<li>${fuera.length} partida(s) con datos que no son de esta vista (${esc(nombreArea(cur))}${ceco ? ' · ' + esc(ceco) : ''}); no se tocan.</li>` : ''}
@@ -500,9 +518,119 @@ $('grid').addEventListener('click', async e => {
   const id = +b.dataset.quitar;
   const { error, count } = await sb.from('lineas').delete({ count: 'exact' }).eq('id', id);
   if (error || !count) return say('No se pudo quitar la línea' + (error ? ': ' + error.message : ' (sin permiso o ya enviada).'), true);
-  LINEAS = LINEAS.filter(l => l.id !== id); delete montos[id]; dirty.delete(id); ordenar();
+  LINEAS = LINEAS.filter(l => l.id !== id); for (const x of Object.values(store)) { delete x.data[id]; x.dirty.delete(id); } ordenar();
   buildGrid(); statusCap(); say('Línea quitada.');
 });
+
+
+// ---------- pestañas y comparativo ----------
+function opcionesCeco(id) {
+  const cecos = [...new Set(lineasArea(cur).map(l => l.ceco))].sort();
+  if (ceco && !cecos.includes(ceco)) ceco = '';
+  $(id).innerHTML = (cecos.length > 1 ? '<option value="">Todos los departamentos</option>' : '') + cecos.map(c => `<option value="${c}">${c} · ${esc(DEP[c] || '')}${id === 'fCeco' && modo === 'ppto' && capt[cur + '|' + c] === 'enviado' ? ' (enviado)' : ''}</option>`).join('');
+  if (cecos.length === 1) ceco = cecos[0];
+  $(id).value = ceco; $(id).classList.toggle('hidden', cecos.length < 2);
+}
+function modosRender() {
+  const ms = [['ppto', 'Presupuesto'], ...(admin ? [['real', 'Real']] : []), ['comp', 'Comparativo']];
+  $('modos').innerHTML = ms.map(([k, n]) => `<button type="button" role="tab" data-modo="${k}" aria-selected="${view === 'cap' && modo === k}">${n}</button>`).join('');
+}
+$('modos').onclick = e => {
+  const b = e.target.closest('[data-modo]'); if (!b) return;
+  modo = b.dataset.modo; try { localStorage.setItem('modo', modo); } catch {}
+  usarStore(); $('impBox').classList.add('hidden'); $('nlBox').classList.add('hidden');
+  if (view !== 'cap' || location.hash.slice(1) !== cur) location.hash = cur; else route();
+};
+$('fCierre').onchange = async () => {
+  const v = +$('fCierre').value;
+  const { error } = await sb.from('ejercicios').update({ mes_cierre: v, actualizado: new Date().toISOString(), actualizado_por: me }).eq('ejercicio', EJ);
+  if (error) { $('fCierre').value = String(cierre); return say('No se pudo cambiar el mes de cierre: ' + error.message, true); }
+  cierre = v; corte = 0; statusCap();
+  say(v ? `Mes de cierre: ${MES[v - 1]}. Las áreas ya ven el comparativo hasta ese mes.` : 'Sin mes cerrado: las áreas no ven el comparativo todavía.');
+};
+const pctTxt = (a, b) => b ? (a / b * 100).toFixed(1) + '%' : (a ? 'sin ppto' : '—');
+const varTd = (v, base) => `<td class="${v > 0.5 ? 'over' : ''}">${v ? (v > 0 ? '+' : '') + fmt.format(v) : '—'}</td><td class="${v > 0.5 ? 'over' : ''}">${pctTxt(v, base)}</td>`;
+function ultimoReal() { let u = 0; for (const v of Object.values(store.real.data)) v.m.forEach((x, i) => { if (x) u = Math.max(u, i + 1); }); return u; }
+function compFilas(ls, c, acum) {
+  const P = store.ppto.data, R = store.real.data, i0 = acum ? 0 : c - 1;
+  return ls.map(l => {
+    const p = P[l.id]?.m || [], r = R[l.id]?.m || []; let pp = 0, rr = 0;
+    for (let i = i0; i < c; i++) { pp += +p[i] || 0; rr += +r[i] || 0; }
+    let ra = 0; for (let i = 0; i < c; i++) ra += +r[i] || 0;
+    return { l, p: pp, r: rr, anual: sum(p), ra, nota: R[l.id]?.nota || '' };
+  });
+}
+function resumen(filas, clave, nombre) {
+  const g = {}; for (const f of filas) { const k = clave(f.l); const x = g[k] || (g[k] = { n: nombre(k), p: 0, r: 0, anual: 0, ra: 0 }); x.p += f.p; x.r += f.r; x.anual += f.anual; x.ra += f.ra; }
+  return Object.values(g);
+}
+function tablaComp(titulo, grupos) {
+  const T = grupos.reduce((a, x) => ({ p: a.p + x.p, r: a.r + x.r, anual: a.anual + x.anual, ra: a.ra + x.ra }), { p: 0, r: 0, anual: 0, ra: 0 });
+  const fila = (x, cls = '') => `<tr class="${cls}"><td>${esc(x.n)}</td><td>${fmt.format(x.p)}</td><td>${fmt.format(x.r)}</td>${varTd(x.r - x.p, x.p)}<td>${fmt.format(x.anual)}</td><td>${pctTxt(x.ra, x.anual)}</td></tr>`;
+  return `<thead><tr><th>${titulo}</th><th>Presupuesto</th><th>Real</th><th>Variación</th><th>Var %</th><th>Ppto anual</th><th>Ejercido del anual</th></tr></thead><tbody>${grupos.map(x => fila(x)).join('')}${fila({ n: 'Total', ...T }, 'tot')}</tbody>`;
+}
+function comp() {
+  const maxMes = admin ? 12 : cierre;
+  $('compCtl').classList.toggle('hidden', !maxMes);
+  if (!maxMes) { $('compBody').innerHTML = '<p class="help">Aún no hay meses cerrados con gasto real. Finanzas lo publicará al cerrar cada mes.</p>'; return; }
+  if (!corte || corte > maxMes) corte = Math.min(maxMes, cierre || ultimoReal() || 1);
+  $('cMes').innerHTML = MES.slice(0, maxMes).map((m, i) => `<option value="${i + 1}">${m} ${EJ}${i + 1 === cierre ? ' (cierre)' : ''}</option>`).join('');
+  $('cMes').value = String(corte);
+  const acum = $('cModo').value === 'acum', solo = $('cSolo').checked;
+  const ls = lineasVista();
+  const filas = compFilas(ls, corte, acum).filter(f => !solo || f.p || f.r || f.anual || f.ra);
+  const P = sum(filas.map(f => f.p)), R = sum(filas.map(f => f.r)), A = sum(filas.map(f => f.anual)), RA = sum(filas.map(f => f.ra)), V = R - P;
+  const per = acum ? `Ene–${MES[corte - 1]} ${EJ}` : `${MES[corte - 1]} ${EJ}`;
+  // mensual
+  const pm = Array(12).fill(0), rm = Array(12).fill(0);
+  for (const l of ls) { const p = store.ppto.data[l.id]?.m, r = store.real.data[l.id]?.m; if (p) p.forEach((x, i) => pm[i] += +x || 0); if (r) r.forEach((x, i) => rm[i] += +x || 0); }
+  const top = Math.max(1, ...pm, ...rm.slice(0, corte));
+  const barras = MES.map((m, i) => {
+    const conReal = i < corte, over = conReal && rm[i] > pm[i] + 0.5;
+    return `<div class="mb" title="${m}: ppto ${fmt.format(pm[i])}${conReal ? ' · real ' + fmt.format(rm[i]) : ''}"><div class="mbp"><i class="bp" style="height:${pm[i] / top * 100}%"></i><i class="br ${over ? 'over' : ''}" style="height:${conReal ? rm[i] / top * 100 : 0}%"></i></div><span class="${i + 1 === corte ? 'sel' : ''}">${m}</span></div>`;
+  }).join('');
+  // detalle por rubro
+  let det = '', sec = null, sp = 0, sr = 0;
+  const cierraSec = () => sec !== null ? `<tr class="sec2"><td colspan="2">Total ${esc(sec)}</td><td>${fmt.format(sp)}</td><td>${fmt.format(sr)}</td>${varTd(sr - sp, sp)}<td colspan="3"></td></tr>` : '';
+  for (const f of filas) {
+    const l = f.l;
+    if (l.rubro !== sec) { det += cierraSec(); sec = l.rubro; sp = 0; sr = 0; det += `<tr class="sec"><td colspan="10">${esc(sec)}</td></tr>`; }
+    sp += f.p; sr += f.r;
+    det += `<tr><td>${esc(l.concepto)}<small>${esc([l.cuenta, cur === TODAS ? nombreArea(l.area) : ''].filter(Boolean).join(' · '))}</small></td><td>${esc(l.ceco)}<small>${esc(DEP[l.ceco] || '')}</small></td><td>${fmt.format(f.p)}</td><td>${fmt.format(f.r)}</td>${varTd(f.r - f.p, f.p)}<td>${fmt.format(f.anual)}</td><td>${pctTxt(f.ra, f.anual)}</td><td class="tl">${esc(f.nota)}</td></tr>`;
+  }
+  det += cierraSec();
+  const porArea = cur === TODAS ? `<h3>Por área · ${per}</h3><div class="grid" style="max-height:none"><table class="cons">${tablaComp('Área', resumen(filas, l => l.area, nombreArea))}</table></div>` : '';
+  const porDep = `<h3>Por departamento · ${per}</h3><div class="grid" style="max-height:none"><table class="cons">${tablaComp('Departamento', resumen(filas, l => l.ceco, c => c + ' · ' + (DEP[c] || '')).sort((a, b) => a.n.localeCompare(b.n)))}</table></div>`;
+  $('compBody').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><span>Presupuesto ${per}</span><b>${money(P)}</b></div>
+      <div class="kpi"><span>Real ${per}</span><b>${money(R)}</b></div>
+      <div class="kpi ${V > 0.5 ? 'over' : ''}"><span>Variación (real − ppto)</span><b>${V > 0.5 ? '+' : ''}${money(V)}</b><em>${pctTxt(V, P)} ${V > 0.5 ? 'arriba del presupuesto' : V < -0.5 ? 'abajo del presupuesto' : ''}</em></div>
+      <div class="kpi"><span>Ejercido del presupuesto anual</span><b>${pctTxt(RA, A)}</b><em>${money(RA)} de ${money(A)}</em></div>
+    </div>
+    <div class="mbars" aria-label="Presupuesto contra real por mes">${barras}</div>
+    <p class="leyenda"><i class="bp"></i> Presupuesto <i class="br"></i> Real <i class="br over"></i> Real arriba del presupuesto</p>
+    ${porArea}
+    <h3>Detalle por partida · ${per}</h3>
+    <div class="grid"><table class="cons comp-det"><thead><tr><th>Partida</th><th>CECO</th><th>Presupuesto</th><th>Real</th><th>Variación</th><th>Var %</th><th>Ppto anual</th><th>Ejercido</th><th class="tl">Nota del real</th></tr></thead><tbody>${det || '<tr><td colspan="9">Sin partidas con importe.</td></tr>'}</tbody></table></div>
+    ${porDep}`;
+  window.__compFilas = { filas, per };
+}
+['cMes', 'cModo', 'cSolo'].forEach(id => $(id).onchange = () => { if (id === 'cMes') corte = +$('cMes').value; comp(); });
+$('cCeco').onchange = () => { ceco = $('cCeco').value; comp(); };
+$('bXC').onclick = () => {
+  const { filas, per } = window.__compFilas || {}; if (!filas) return;
+  const head = ['ID', 'Rubro', 'Concepto', 'Cuenta', 'CECO', 'Departamento', 'Área', 'Presupuesto', 'Real', 'Variación', 'Var %', 'Ppto anual', 'Ejercido %', 'Nota del real'];
+  const rows = filas.map(f => [f.l.id, f.l.rubro, f.l.concepto, f.l.cuenta || '', f.l.ceco, DEP[f.l.ceco] || '', nombreArea(f.l.area), f.p, f.r, f.r - f.p, f.p ? (f.r - f.p) / f.p : null, f.anual, f.anual ? f.ra / f.anual : null, f.nota]);
+  const ws = XLSX.utils.aoa_to_sheet([[window.CONFIG.empresa], ['COMPARATIVO PRESUPUESTO VS REAL · ' + per + ' · ' + nombreArea(cur) + (ceco ? ' · ' + ceco : '')], [], head, ...rows]);
+  for (let R = 4; R < rows.length + 4; R++) { for (const C of [7, 8, 9, 11]) { const c = ws[XLSX.utils.encode_cell({ r: R, c: C })]; if (c) c.z = '#,##0.00'; } for (const C of [10, 12]) { const c = ws[XLSX.utils.encode_cell({ r: R, c: C })]; if (c) c.z = '0.0%'; } }
+  ws['!cols'] = [{ wch: 7 }, { wch: 24 }, { wch: 32 }, { wch: 16 }, { wch: 7 }, { wch: 20 }, { wch: 16 }, ...Array(6).fill({ wch: 14 }), { wch: 40 }];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Comparativo');
+  const dep = [['Departamento', 'Presupuesto', 'Real', 'Variación', 'Ppto anual']]; resumen(filas, l => l.ceco, c => c + ' · ' + (DEP[c] || '')).forEach(x => dep.push([x.n, x.p, x.r, x.r - x.p, x.anual]));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dep), 'Por departamento');
+  if (cur === TODAS) { const ar = [['Área', 'Presupuesto', 'Real', 'Variación', 'Ppto anual']]; resumen(filas, l => l.area, nombreArea).forEach(x => ar.push([x.n, x.p, x.r, x.r - x.p, x.anual])); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ar), 'Por área'); }
+  XLSX.writeFile(wb, `Comparativo_${EJ}_${MES[corte - 1]}_${slug(nombreArea(cur))}.xlsx`);
+};
 
 // ---------- navegación ----------
 function route() {
@@ -511,12 +639,14 @@ function route() {
   if (h === 'consolidado') view = 'cons';
   else if (h === 'accesos' && admin) view = 'acc';
   else { view = 'cap'; if ((AREAS.some(a => a.k === h) || (h === TODAS && verTodas())) && h !== cur) { cur = h; ceco = ''; $('q').value = ''; } }
-  for (const [v, id] of [['cap', 'vCap'], ['cons', 'vCons'], ['acc', 'vAcc']]) $(id).classList.toggle('hidden', v !== view);
-  if (view === 'cap') {
+  if (view === 'cons' && modo !== 'ppto') { modo = 'ppto'; usarStore(); }
+  const vista = view === 'cap' && modo === 'comp' ? 'comp' : view;
+  for (const [v, id] of [['cap', 'vCap'], ['comp', 'vComp'], ['cons', 'vCons'], ['acc', 'vAcc']]) $(id).classList.toggle('hidden', v !== vista);
+  modosRender();
+  if (vista === 'comp') { opcionesCeco('cCeco'); comp(); }
+  else if (view === 'cap') {
     const cecos = [...new Set(lineasArea(cur).map(l => l.ceco))].sort();
-    $('fCeco').innerHTML = (cecos.length > 1 ? '<option value="">Todos los departamentos</option>' : '') + cecos.map(c => `<option value="${c}">${c} · ${esc(DEP[c] || '')}${capt[cur + '|' + c] === 'enviado' ? ' (enviado)' : ''}</option>`).join('');
-    if (cecos.length === 1) ceco = cecos[0];
-    $('fCeco').value = ceco; $('fCeco').classList.toggle('hidden', cecos.length < 2);
+    opcionesCeco('fCeco');
     buildGrid(); statusCap();
   } else if (view === 'cons') cons(); else accRender();
   strip();
@@ -569,8 +699,8 @@ $('bReopen').onclick = async () => {
   if (error) return say('No se pudo reabrir: ' + error.message, true);
   await cargar(); say('Captura reabierta.');
 };
-$('bReload').onclick = async () => { if (dirty.size && !await confirma('bReload', 'Perderás cambios. ¿Recargar?')) return; await cargar(); };
-$('bXA').onclick = () => exportX(lineasVista(), `Plantilla_${EJ}_${nombreArea(cur).replace(/[^A-Za-z0-9]+/g, '_')}${ceco ? '_' + ceco : ''}.xlsx`, false);
+$('bReload').onclick = async () => { if ((store.ppto.dirty.size || store.real.dirty.size) && !await confirma('bReload', 'Perderás cambios. ¿Recargar?')) return; await cargar(); };
+$('bXA').onclick = () => exportX(lineasVista(), `${modo === 'real' ? 'Real' : 'Plantilla'}_${EJ}_${slug(nombreArea(cur))}${ceco ? '_' + ceco : ''}.xlsx`, false);
 $('bXT').onclick = () => exportX(LINEAS, `Presupuesto_${EJ}_Consolidado.xlsx`, true);
-window.addEventListener('beforeunload', e => { if (dirty.size) { e.preventDefault(); e.returnValue = ''; } });
+window.addEventListener('beforeunload', e => { if (store.ppto.dirty.size || store.real.dirty.size) { e.preventDefault(); e.returnValue = ''; } });
 }
